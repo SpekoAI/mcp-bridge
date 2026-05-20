@@ -47,7 +47,10 @@
     "provenance": true
   },
   "dependencies": {
+    "@clack/prompts": "^1.4.0",
+    "jsonc-parser": "^3.3.1",
     "mcp-remote": "^0.1.38",
+    "smol-toml": "^1.6.1",
     "tslib": "^2.3.0"
   },
   "devDependencies": {

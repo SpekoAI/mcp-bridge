@@ -1,16 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AUTH_HEADER_ENV,
+  BRIDGE_HELP_TEXT,
   buildAuthHeaderArgs,
   buildProxyArgv,
   DEFAULT_AUTH_MCP_URL,
   DEFAULT_PUBLIC_MCP_URL,
   HELP_TEXT,
+  isCliEntrypoint,
   resolveCliConfig,
+  run,
 } from '../src/index.js';
 
 describe('spekoai-mcp CLI helpers', () => {
-  it('uses the authenticated hosted MCP endpoint by default', () => {
+  it('uses the authenticated hosted MCP endpoint by default for the bridge command', () => {
     expect(resolveCliConfig([], {})).toEqual({
       serverUrl: DEFAULT_AUTH_MCP_URL,
       passthroughArgs: [],
@@ -55,6 +62,65 @@ describe('spekoai-mcp CLI helpers', () => {
   it('detects help without changing pass-through behavior', () => {
     expect(resolveCliConfig(['--help'], {}).help).toBe(true);
     expect(HELP_TEXT).toContain('Usage: spekoai-mcp');
+    expect(HELP_TEXT).toContain('spekoai-mcp bridge');
+    expect(HELP_TEXT).not.toContain('SPEKOAI_MCP_AUTH_URL');
+    expect(HELP_TEXT).not.toContain('SPEKOAI_MCP_URL');
+    expect(HELP_TEXT).not.toContain('mcp-staging');
+    expect(BRIDGE_HELP_TEXT).not.toContain('SPEKOAI_MCP_AUTH_URL');
+    expect(BRIDGE_HELP_TEXT).not.toContain('SPEKOAI_MCP_URL');
+    expect(BRIDGE_HELP_TEXT).not.toContain('mcp-staging');
+  });
+
+  it('prints top-level help when no command is provided', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await expect(run([], {})).resolves.toBeUndefined();
+      expect(write).toHaveBeenCalledWith(HELP_TEXT);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('prints bridge help under the bridge subcommand', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await expect(run(['bridge', '--help'], {})).resolves.toBeUndefined();
+      expect(write).toHaveBeenCalledWith(BRIDGE_HELP_TEXT);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('rejects bridge flags at the top level', async () => {
+    await expect(run(['--public'], {})).rejects.toThrow(/Unknown command/);
+  });
+
+  it('routes init before proxy argument resolution', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await expect(
+        run(
+          ['init', '--dry-run', '--access', 'docs', '--tools', 'cursor', '--scope', 'project'],
+          {},
+        ),
+      ).resolves.toBeUndefined();
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('treats npm .bin symlinks as direct CLI execution', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spekoai-mcp-'));
+    try {
+      const target = join(dir, 'dist-index.js');
+      const symlink = join(dir, 'spekoai-mcp');
+      writeFileSync(target, '');
+      symlinkSync(target, symlink);
+
+      expect(isCliEntrypoint(symlink, pathToFileURL(target).href)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('builds a safe env-backed Authorization header when SPEKO_API_KEY is set', () => {
