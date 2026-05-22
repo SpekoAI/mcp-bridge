@@ -6,9 +6,8 @@ import { dirname, join } from 'node:path';
 import { confirm, intro, isCancel, log, multiselect, note, outro, select } from '@clack/prompts';
 import { applyEdits, modify, type ParseError, parse as parseJsonc } from 'jsonc-parser';
 import { parse as parseToml } from 'smol-toml';
-import { DEFAULT_AUTH_MCP_URL, DEFAULT_PUBLIC_MCP_URL, type Environment } from './constants.js';
+import { DEFAULT_AUTH_MCP_URL, type Environment } from './constants.js';
 
-export type InitAccess = 'full' | 'docs';
 export type InitAuth = 'oauth' | 'api-key';
 export type InitScope = 'user' | 'project';
 export type InitTool = 'claude' | 'codex' | 'opencode' | 'cursor' | 'other';
@@ -16,7 +15,6 @@ export type InitTool = 'claude' | 'codex' | 'opencode' | 'cursor' | 'other';
 type InitArgValue = string | boolean;
 
 export type ParsedInitArgs = {
-  access?: InitAccess;
   auth?: InitAuth;
   tools?: InitTool[];
   scope?: InitScope;
@@ -26,8 +24,7 @@ export type ParsedInitArgs = {
 };
 
 export type ResolvedInitOptions = {
-  access: InitAccess;
-  auth?: InitAuth;
+  auth: InitAuth;
   tools: InitTool[];
   scope: InitScope;
   dryRun: boolean;
@@ -111,8 +108,7 @@ export const INIT_HELP_TEXT = `Usage: spekoai-mcp init [options]
 Configure Speko MCP in Claude Code, Codex, OpenCode, Cursor, or another MCP client.
 
 Options:
-  --access <full|docs>        full uses ${DEFAULT_AUTH_MCP_URL}; docs uses ${DEFAULT_PUBLIC_MCP_URL}
-  --auth <oauth|api-key>      Authentication mode for full access.
+  --auth <oauth|api-key>      Authentication mode for ${DEFAULT_AUTH_MCP_URL}.
   --tools <list>              Comma-separated tools: claude,codex,opencode,cursor,other
   --scope <user|project>      Install globally for the user or in the current project.
   --dry-run                   Print the planned changes without writing files or running commands.
@@ -121,8 +117,8 @@ Options:
 
 Examples:
   spekoai-mcp init
-  spekoai-mcp init --dry-run --access docs --tools cursor --scope project --yes
-  spekoai-mcp init --access full --auth oauth --tools claude,codex --scope user --yes
+  spekoai-mcp init --dry-run --auth oauth --tools cursor --scope project --yes
+  spekoai-mcp init --auth oauth --tools claude,codex --scope user --yes
 `;
 
 export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
@@ -143,10 +139,6 @@ export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
       case '-h':
         parsed.help = true;
         break;
-      case '--access':
-        parsed.access = parseAccess(readFlagValue(argv, index, arg));
-        index += 1;
-        break;
       case '--auth':
         parsed.auth = parseAuth(readFlagValue(argv, index, arg));
         index += 1;
@@ -160,9 +152,7 @@ export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
         index += 1;
         break;
       default:
-        if (arg.startsWith('--access=')) {
-          parsed.access = parseAccess(readInlineFlagValue(arg));
-        } else if (arg.startsWith('--auth=')) {
+        if (arg.startsWith('--auth=')) {
           parsed.auth = parseAuth(readInlineFlagValue(arg));
         } else if (arg.startsWith('--tools=')) {
           parsed.tools = parseTools(readInlineFlagValue(arg));
@@ -179,8 +169,7 @@ export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
 
 export function completeInitArgs(parsed: ParsedInitArgs): ResolvedInitOptions {
   const missing: string[] = [];
-  if (!parsed.access) missing.push('--access');
-  if (parsed.access === 'full' && !parsed.auth) missing.push('--auth');
+  if (!parsed.auth) missing.push('--auth');
   if (!parsed.tools?.length) missing.push('--tools');
   if (!parsed.scope) missing.push('--scope');
   if (!parsed.dryRun && !parsed.yes) missing.push('--yes or --dry-run');
@@ -193,16 +182,15 @@ export function completeInitArgs(parsed: ParsedInitArgs): ResolvedInitOptions {
     );
   }
 
-  const access = parsed.access;
+  const auth = parsed.auth;
   const tools = parsed.tools;
   const scope = parsed.scope;
-  if (!access || !tools?.length || !scope) {
+  if (!auth || !tools?.length || !scope) {
     throw new Error('spekoai-mcp init options are incomplete.');
   }
 
   return {
-    access,
-    auth: access === 'full' ? parsed.auth : undefined,
+    auth,
     tools,
     scope,
     dryRun: parsed.dryRun,
@@ -210,12 +198,8 @@ export function completeInitArgs(parsed: ParsedInitArgs): ResolvedInitOptions {
   } satisfies ResolvedInitOptions;
 }
 
-export function endpointForAccess(access: InitAccess): string {
-  return access === 'full' ? DEFAULT_AUTH_MCP_URL : DEFAULT_PUBLIC_MCP_URL;
-}
-
-export function isApiKeyAuth(options: Pick<ResolvedInitOptions, 'access' | 'auth'>): boolean {
-  return options.access === 'full' && options.auth === 'api-key';
+export function isApiKeyAuth(options: Pick<ResolvedInitOptions, 'auth'>): boolean {
+  return options.auth === 'api-key';
 }
 
 export function buildCursorConfig(
@@ -317,7 +301,7 @@ export function buildCodexConfig(
 }
 
 export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): PlannedInitStep[] {
-  const endpoint = endpointForAccess(options.access);
+  const endpoint = DEFAULT_AUTH_MCP_URL;
   const apiKeyAuth = isApiKeyAuth(options);
   const steps: PlannedInitStep[] = [];
 
@@ -332,8 +316,7 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         path: join(paths.homeDir, '.codex', 'config.toml'),
         build: (existing) => buildCodexConfig(existing, endpoint, apiKeyAuth),
         manualSnippet: codexSnippet(endpoint, apiKeyAuth),
-        postInstall:
-          options.access === 'full' && !apiKeyAuth ? 'Run: codex mcp login speko' : undefined,
+        postInstall: !apiKeyAuth ? 'Run: codex mcp login speko' : undefined,
       });
     } else if (tool === 'opencode') {
       const configPath =
@@ -347,8 +330,7 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         path: configPath,
         build: (existing) => buildOpenCodeConfig(existing, endpoint, apiKeyAuth),
         manualSnippet: openCodeSnippet(endpoint, apiKeyAuth),
-        postInstall:
-          options.access === 'full' && !apiKeyAuth ? 'Run: opencode mcp auth speko' : undefined,
+        postInstall: !apiKeyAuth ? 'Run: opencode mcp auth speko' : undefined,
       });
     } else if (tool === 'cursor') {
       const configPath =
@@ -368,7 +350,7 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         kind: 'manual',
         tool,
         label: 'Other MCP clients',
-        manualSnippet: otherClientSnippet(endpoint, options.access, apiKeyAuth),
+        manualSnippet: otherClientSnippet(endpoint, apiKeyAuth),
       });
     }
   }
@@ -380,11 +362,10 @@ export function renderPlanSummary(
   options: ResolvedInitOptions,
   steps: readonly PlannedInitStep[],
 ): string {
-  const endpoint = endpointForAccess(options.access);
+  const endpoint = DEFAULT_AUTH_MCP_URL;
   const lines = [
-    `Access: ${options.access === 'full' ? 'Full access' : 'Docs and scaffolds only'}`,
     `Endpoint: ${endpoint}`,
-    `Auth: ${options.access === 'full' ? (options.auth === 'api-key' ? 'SPEKO_API_KEY' : 'OAuth') : 'None'}`,
+    `Auth: ${options.auth === 'api-key' ? 'SPEKO_API_KEY' : 'OAuth'}`,
     `Scope: ${options.scope}`,
     '',
     'Planned changes:',
@@ -488,39 +469,17 @@ export async function runInitCommand(
 async function promptForMissingOptions(parsed: ParsedInitArgs): Promise<ResolvedInitOptions> {
   intro('Configure Speko MCP');
 
-  const access =
-    parsed.access ??
-    (await promptValue<InitAccess>(
+  const auth =
+    parsed.auth ??
+    (await promptValue<InitAuth>(
       select({
-        message: 'Which Speko MCP endpoint do you want?',
+        message: 'How should Speko MCP authenticate?',
         options: [
-          {
-            value: 'full',
-            label: 'Full Speko account access',
-            hint: 'private actions like balance, logs, builds, tests, deploys, plus docs',
-          },
-          {
-            value: 'docs',
-            label: 'Public docs and scaffolds only',
-            hint: 'no sign-in; docs, package guidance, recommendations, and example scaffolds',
-          },
+          { value: 'oauth', label: 'OAuth', hint: 'recommended when your tool supports it' },
+          { value: 'api-key', label: 'SPEKO_API_KEY', hint: 'uses an environment variable' },
         ],
       }),
     ));
-
-  const auth =
-    access === 'full'
-      ? (parsed.auth ??
-        (await promptValue<InitAuth>(
-          select({
-            message: 'How should full access authenticate?',
-            options: [
-              { value: 'oauth', label: 'OAuth', hint: 'recommended when your tool supports it' },
-              { value: 'api-key', label: 'SPEKO_API_KEY', hint: 'uses an environment variable' },
-            ],
-          }),
-        )))
-      : undefined;
 
   const tools =
     parsed.tools ??
@@ -547,7 +506,6 @@ async function promptForMissingOptions(parsed: ParsedInitArgs): Promise<Resolved
     ));
 
   return {
-    access,
     auth,
     tools,
     scope,
@@ -670,8 +628,7 @@ function buildClaudeStep(
       endpoint,
     ],
     manualSnippet,
-    postInstall:
-      options.access === 'full' ? 'In Claude Code, run /mcp and complete sign-in.' : undefined,
+    postInstall: 'In Claude Code, run /mcp and complete sign-in.',
   };
 }
 
@@ -767,13 +724,10 @@ function claudeSnippet(endpoint: string, scope: InitScope, apiKeyAuth: boolean):
     : `claude mcp add --transport http --scope ${scope} speko ${endpoint}`;
 }
 
-function otherClientSnippet(endpoint: string, access: InitAccess, apiKeyAuth: boolean): string {
-  const auth =
-    access === 'docs'
-      ? 'Authentication: None'
-      : apiKeyAuth
-        ? 'API key auth: Send Authorization: Bearer sk_live_xxx'
-        : "OAuth: Use the client's OAuth flow";
+function otherClientSnippet(endpoint: string, apiKeyAuth: boolean): string {
+  const auth = apiKeyAuth
+    ? 'API key auth: Send Authorization: Bearer sk_live_xxx'
+    : "OAuth: Use the client's OAuth flow";
 
   return `Name: speko
 URL: ${endpoint}
@@ -904,11 +858,6 @@ function readInlineFlagValue(arg: string): string {
     throw new Error(`Missing value for ${arg.slice(0, arg.indexOf('='))}`);
   }
   return value;
-}
-
-function parseAccess(value: string): InitAccess {
-  if (value === 'full' || value === 'docs') return value;
-  throw new Error(`Invalid --access value: ${value}`);
 }
 
 function parseAuth(value: string): InitAuth {

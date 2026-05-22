@@ -19,7 +19,7 @@ clients.
 For scripted setup, pass the choices explicitly:
 
 ```bash
-npx @spekoai/mcp@latest init --access full --auth oauth --tools claude,codex --scope user --yes
+npx @spekoai/mcp@latest init --auth oauth --tools claude,codex --scope user --yes
 ```
 
 ## Bridge
@@ -40,8 +40,7 @@ Use direct remote MCP configuration instead when your client supports it.
 
 Defaults:
 
-- Authenticated endpoint: `https://mcp.speko.ai/mcp-auth`
-- Public-only endpoint: `https://mcp.speko.ai/mcp`
+- Endpoint: `https://mcp.speko.ai/mcp`
 
 Environment variables:
 
@@ -51,7 +50,6 @@ CLI examples:
 
 ```bash
 npx @spekoai/mcp@latest bridge
-npx @spekoai/mcp@latest bridge --public
 SPEKO_API_KEY=sk_live_xxx npx @spekoai/mcp@latest bridge
 ```
 
@@ -68,8 +66,9 @@ npx @spekoai/mcp@latest bridge --help
 
 When using `bridge`, OAuth state is handled by
 [`mcp-remote`](https://www.npmjs.com/package/mcp-remote). It may create
-`~/.mcp-auth` or use `MCP_REMOTE_CONFIG_DIR` to store local OAuth credentials
-and debug logs. The `init` wizard does not write that directory.
+a local OAuth cache directory, or use `MCP_REMOTE_CONFIG_DIR` to store local
+OAuth credentials and debug logs. The `init` wizard does not write that
+directory.
 
 For connection or OAuth issues, pass `--debug` and inspect the log path printed
 by [`mcp-remote`](https://www.npmjs.com/package/mcp-remote).

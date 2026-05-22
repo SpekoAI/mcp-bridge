@@ -9,7 +9,6 @@ import {
   buildOpenCodeConfig,
   completeInitArgs,
   DEFAULT_AUTH_MCP_URL,
-  DEFAULT_PUBLIC_MCP_URL,
   DEFAULT_SCOPE,
   DEFAULT_SELECTED_TOOLS,
   INIT_HELP_TEXT,
@@ -27,17 +26,15 @@ describe('spekoai-mcp init', () => {
     expect(DEFAULT_SCOPE).toBe('project');
   });
 
-  it('describes the two endpoint modes clearly in help output', () => {
-    expect(INIT_HELP_TEXT).toContain('full uses');
-    expect(INIT_HELP_TEXT).toContain('docs uses');
+  it('describes the single hosted endpoint in help output', () => {
+    expect(INIT_HELP_TEXT).toContain(DEFAULT_AUTH_MCP_URL);
+    expect(INIT_HELP_TEXT).not.toContain('docs');
   });
 
   it('parses complete non-interactive init flags', () => {
     expect(
       completeInitArgs(
         parseInitArgs([
-          '--access',
-          'full',
           '--auth',
           'oauth',
           '--tools',
@@ -48,7 +45,6 @@ describe('spekoai-mcp init', () => {
         ]),
       ),
     ).toEqual({
-      access: 'full',
       auth: 'oauth',
       tools: ['claude', 'codex', 'opencode', 'cursor', 'other'],
       scope: 'user',
@@ -58,7 +54,7 @@ describe('spekoai-mcp init', () => {
   });
 
   it('rejects non-interactive init when required flags are missing', () => {
-    expect(() => completeInitArgs(parseInitArgs(['--access', 'full']))).toThrow(
+    expect(() => completeInitArgs(parseInitArgs(['--auth', 'oauth']))).toThrow(
       /running non-interactively/,
     );
   });
@@ -139,23 +135,6 @@ bearer_token_env_var = "SPEKO_API_KEY"
     });
   });
 
-  it('builds docs-only configs', () => {
-    expect(buildCodexConfig('', DEFAULT_PUBLIC_MCP_URL, false)).toEqual({
-      ok: true,
-      content: `[mcp_servers.speko]
-url = "${DEFAULT_PUBLIC_MCP_URL}"
-`,
-    });
-    expect(buildOpenCodeConfig('', DEFAULT_PUBLIC_MCP_URL, false)).toEqual({
-      ok: true,
-      content: expect.stringContaining(`"url": "${DEFAULT_PUBLIC_MCP_URL}"`),
-    });
-    expect(buildCursorConfig('', DEFAULT_PUBLIC_MCP_URL, false)).toEqual({
-      ok: true,
-      content: expect.stringContaining(`"url": "${DEFAULT_PUBLIC_MCP_URL}"`),
-    });
-  });
-
   it('merges JSON configs and preserves unrelated entries', () => {
     const openCode = buildOpenCodeConfig(
       `{
@@ -173,14 +152,14 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
   }
 }
 `,
-      DEFAULT_PUBLIC_MCP_URL,
+      DEFAULT_AUTH_MCP_URL,
       false,
     );
 
     expect(openCode.ok).toBe(true);
     expect(openCode.ok ? openCode.content : '').toContain('"model": "anthropic/claude-sonnet-4-5"');
     expect(openCode.ok ? openCode.content : '').toContain('"github"');
-    expect(openCode.ok ? openCode.content : '').toContain(`"url": "${DEFAULT_PUBLIC_MCP_URL}"`);
+    expect(openCode.ok ? openCode.content : '').toContain(`"url": "${DEFAULT_AUTH_MCP_URL}"`);
 
     const cursor = buildCursorConfig(
       `{
@@ -218,7 +197,7 @@ url = "https://old.example/mcp"
 [tools]
 enabled = true
 `,
-      DEFAULT_PUBLIC_MCP_URL,
+      DEFAULT_AUTH_MCP_URL,
       false,
     );
 
@@ -233,17 +212,17 @@ url = "https://example.test/mcp"
 enabled = true
 
 [mcp_servers.speko]
-url = "${DEFAULT_PUBLIC_MCP_URL}"
+url = "${DEFAULT_AUTH_MCP_URL}"
 `,
     });
   });
 
   it('skips invalid configs with manual snippets', () => {
-    const openCode = buildOpenCodeConfig('{ invalid', DEFAULT_PUBLIC_MCP_URL, false);
+    const openCode = buildOpenCodeConfig('{ invalid', DEFAULT_AUTH_MCP_URL, false);
     expect(openCode.ok).toBe(false);
-    expect(openCode.ok ? '' : openCode.manualSnippet).toContain(DEFAULT_PUBLIC_MCP_URL);
+    expect(openCode.ok ? '' : openCode.manualSnippet).toContain(DEFAULT_AUTH_MCP_URL);
 
-    const codex = buildCodexConfig('[broken', DEFAULT_PUBLIC_MCP_URL, false);
+    const codex = buildCodexConfig('[broken', DEFAULT_AUTH_MCP_URL, false);
     expect(codex.ok).toBe(false);
     expect(codex.ok ? '' : codex.manualSnippet).toContain('[mcp_servers.speko]');
   });
@@ -267,7 +246,7 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
 
     try {
       await runInitCommand(
-        ['--dry-run', '--access', 'docs', '--tools', 'cursor', '--scope', 'project', '--yes'],
+        ['--dry-run', '--auth', 'oauth', '--tools', 'cursor', '--scope', 'project', '--yes'],
         {
           cwd,
           homeDir: home,
@@ -281,7 +260,7 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
       );
 
       await runInitCommand(
-        ['--access', 'docs', '--tools', 'cursor', '--scope', 'project', '--yes'],
+        ['--auth', 'oauth', '--tools', 'cursor', '--scope', 'project', '--yes'],
         {
           cwd,
           homeDir: home,
@@ -293,7 +272,7 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
       );
 
       const updated = readFileSync(join(cwd, '.cursor', 'mcp.json'), 'utf8');
-      expect(updated).toContain(DEFAULT_PUBLIC_MCP_URL);
+      expect(updated).toContain(DEFAULT_AUTH_MCP_URL);
       expect(updated).toContain('"old"');
       expect(existsSync(join(cwd, '.cursor', 'mcp.json.20260520T000000Z.bak'))).toBe(true);
     } finally {
@@ -324,17 +303,7 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
 
     try {
       await runInitCommand(
-        [
-          '--access',
-          'full',
-          '--auth',
-          'oauth',
-          '--tools',
-          'opencode',
-          '--scope',
-          'project',
-          '--yes',
-        ],
+        ['--auth', 'oauth', '--tools', 'opencode', '--scope', 'project', '--yes'],
         {
           cwd,
           homeDir: home,
@@ -367,17 +336,7 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
 
     try {
       await runInitCommand(
-        [
-          '--access',
-          'full',
-          '--auth',
-          'oauth',
-          '--tools',
-          'opencode,codex',
-          '--scope',
-          'project',
-          '--yes',
-        ],
+        ['--auth', 'oauth', '--tools', 'opencode,codex', '--scope', 'project', '--yes'],
         {
           cwd,
           homeDir: home,
@@ -409,7 +368,7 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
 
     try {
       await runInitCommand(
-        ['--access', 'full', '--auth', 'oauth', '--tools', 'claude', '--scope', 'project', '--yes'],
+        ['--auth', 'oauth', '--tools', 'claude', '--scope', 'project', '--yes'],
         {
           cwd: join(dir, 'project'),
           homeDir: join(dir, 'home'),
@@ -445,8 +404,6 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
       await runInitCommand(
         [
           '--dry-run',
-          '--access',
-          'full',
           '--auth',
           'oauth',
           '--tools',
@@ -473,7 +430,6 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
 
   it('builds a manual Claude API-key step instead of writing a secret', () => {
     const options: ResolvedInitOptions = {
-      access: 'full',
       auth: 'api-key',
       tools: ['claude'],
       scope: 'user',

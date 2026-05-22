@@ -3,16 +3,10 @@
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-  AUTH_HEADER_ENV,
-  DEFAULT_AUTH_MCP_URL,
-  DEFAULT_PUBLIC_MCP_URL,
-  type Environment,
-} from './constants.js';
+import { AUTH_HEADER_ENV, DEFAULT_AUTH_MCP_URL, type Environment } from './constants.js';
 import { runInitCommand } from './init.js';
 
 export type {
-  InitAccess,
   InitAuth,
   InitScope,
   InitTool,
@@ -28,18 +22,16 @@ export {
   completeInitArgs,
   DEFAULT_SCOPE,
   DEFAULT_SELECTED_TOOLS,
-  endpointForAccess,
   INIT_HELP_TEXT,
   parseInitArgs,
   runInitCommand,
 } from './init.js';
 export type { Environment };
-export { AUTH_HEADER_ENV, DEFAULT_AUTH_MCP_URL, DEFAULT_PUBLIC_MCP_URL };
+export { AUTH_HEADER_ENV, DEFAULT_AUTH_MCP_URL };
 
 export type CliConfig = {
   serverUrl: string;
   passthroughArgs: string[];
-  publicOnly: boolean;
   help: boolean;
 };
 
@@ -61,9 +53,8 @@ Options:
 
 Examples:
   spekoai-mcp init
-  spekoai-mcp init --dry-run --access docs --tools cursor --scope project --yes
+  spekoai-mcp init --dry-run --auth oauth --tools cursor --scope project --yes
   spekoai-mcp bridge
-  spekoai-mcp bridge --public
 `;
 
 export const BRIDGE_HELP_TEXT = `Usage: spekoai-mcp bridge [options] [mcp-remote flags]
@@ -71,11 +62,9 @@ export const BRIDGE_HELP_TEXT = `Usage: spekoai-mcp bridge [options] [mcp-remote
 Bridge local stdio MCP clients to Speko's hosted MCP server.
 
 Defaults:
-  Full Speko account access:      ${DEFAULT_AUTH_MCP_URL}
-  Public docs and scaffolds only: ${DEFAULT_PUBLIC_MCP_URL}
+  Speko MCP endpoint: ${DEFAULT_AUTH_MCP_URL}
 
 Options:
-  --public     Connect to the public docs/scaffolding endpoint.
   -h, --help   Print this help text.
 
 Environment:
@@ -83,7 +72,6 @@ Environment:
 
 Examples:
   spekoai-mcp bridge
-  spekoai-mcp bridge --public
   SPEKO_API_KEY=sk_live_xxx spekoai-mcp bridge
 
 All remaining arguments are passed through to mcp-remote.
@@ -94,26 +82,20 @@ export function resolveCliConfig(
   env: Environment = process.env,
 ): CliConfig {
   const help = argv.includes('--help') || argv.includes('-h');
-  const withoutPublicFlag = argv.filter((arg) => arg !== '--public');
-  const publicOnly = withoutPublicFlag.length !== argv.length;
-  const first = withoutPublicFlag[0];
+  const first = argv[0];
   const hasExplicitUrl = isHttpUrl(first);
 
   if (hasExplicitUrl) {
     return {
       serverUrl: first,
-      passthroughArgs: withoutPublicFlag.slice(1),
-      publicOnly,
+      passthroughArgs: argv.slice(1),
       help,
     };
   }
 
   return {
-    serverUrl: publicOnly
-      ? envUrl(env.SPEKOAI_MCP_URL, DEFAULT_PUBLIC_MCP_URL)
-      : envUrl(env.SPEKOAI_MCP_AUTH_URL, DEFAULT_AUTH_MCP_URL),
-    passthroughArgs: withoutPublicFlag,
-    publicOnly,
+    serverUrl: envUrl(env.SPEKOAI_MCP_URL, DEFAULT_AUTH_MCP_URL),
+    passthroughArgs: [...argv],
     help,
   };
 }

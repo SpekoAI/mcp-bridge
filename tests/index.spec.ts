@@ -9,7 +9,6 @@ import {
   buildAuthHeaderArgs,
   buildProxyArgv,
   DEFAULT_AUTH_MCP_URL,
-  DEFAULT_PUBLIC_MCP_URL,
   HELP_TEXT,
   isCliEntrypoint,
   resolveCliConfig,
@@ -21,40 +20,22 @@ describe('spekoai-mcp CLI helpers', () => {
     expect(resolveCliConfig([], {})).toEqual({
       serverUrl: DEFAULT_AUTH_MCP_URL,
       passthroughArgs: [],
-      publicOnly: false,
       help: false,
     });
   });
 
-  it('uses the public endpoint when --public is passed', () => {
-    expect(resolveCliConfig(['--public', '--debug'], {})).toEqual({
-      serverUrl: DEFAULT_PUBLIC_MCP_URL,
-      passthroughArgs: ['--debug'],
-      publicOnly: true,
-      help: false,
-    });
-  });
-
-  it('uses environment endpoint overrides for default modes', () => {
+  it('uses environment endpoint overrides', () => {
     expect(
       resolveCliConfig([], {
-        SPEKOAI_MCP_AUTH_URL: 'https://mcp-staging.speko.dev/mcp-auth',
-      }).serverUrl,
-    ).toBe('https://mcp-staging.speko.dev/mcp-auth');
-    expect(
-      resolveCliConfig(['--public'], {
         SPEKOAI_MCP_URL: 'https://mcp-staging.speko.dev/mcp',
       }).serverUrl,
     ).toBe('https://mcp-staging.speko.dev/mcp');
   });
 
   it('lets a positional URL override the default endpoint', () => {
-    expect(
-      resolveCliConfig(['https://example.test/mcp-auth', '--transport', 'http-only'], {}),
-    ).toEqual({
-      serverUrl: 'https://example.test/mcp-auth',
+    expect(resolveCliConfig(['https://example.test/mcp', '--transport', 'http-only'], {})).toEqual({
+      serverUrl: 'https://example.test/mcp',
       passthroughArgs: ['--transport', 'http-only'],
-      publicOnly: false,
       help: false,
     });
   });
@@ -63,10 +44,8 @@ describe('spekoai-mcp CLI helpers', () => {
     expect(resolveCliConfig(['--help'], {}).help).toBe(true);
     expect(HELP_TEXT).toContain('Usage: spekoai-mcp');
     expect(HELP_TEXT).toContain('spekoai-mcp bridge');
-    expect(HELP_TEXT).not.toContain('SPEKOAI_MCP_AUTH_URL');
     expect(HELP_TEXT).not.toContain('SPEKOAI_MCP_URL');
     expect(HELP_TEXT).not.toContain('mcp-staging');
-    expect(BRIDGE_HELP_TEXT).not.toContain('SPEKOAI_MCP_AUTH_URL');
     expect(BRIDGE_HELP_TEXT).not.toContain('SPEKOAI_MCP_URL');
     expect(BRIDGE_HELP_TEXT).not.toContain('mcp-staging');
   });
@@ -92,7 +71,7 @@ describe('spekoai-mcp CLI helpers', () => {
   });
 
   it('rejects bridge flags at the top level', async () => {
-    await expect(run(['--public'], {})).rejects.toThrow(/Unknown command/);
+    await expect(run(['--debug'], {})).rejects.toThrow(/Unknown command/);
   });
 
   it('routes init before proxy argument resolution', async () => {
@@ -100,7 +79,7 @@ describe('spekoai-mcp CLI helpers', () => {
     try {
       await expect(
         run(
-          ['init', '--dry-run', '--access', 'docs', '--tools', 'cursor', '--scope', 'project'],
+          ['init', '--dry-run', '--auth', 'oauth', '--tools', 'cursor', '--scope', 'project'],
           {},
         ),
       ).resolves.toBeUndefined();
