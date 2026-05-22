@@ -79,6 +79,7 @@ type AppliedStep = {
   ok: boolean;
   message: string;
   manualSnippet?: string;
+  postInstall?: string;
 };
 
 type InitDependencies = {
@@ -100,7 +101,7 @@ const TOOL_SPECS: readonly ToolSpec[] = [
   { tool: 'other', label: 'Other clients' },
 ];
 
-export const DEFAULT_SELECTED_TOOLS: readonly InitTool[] = ['claude', 'opencode'];
+export const DEFAULT_SELECTED_TOOLS: readonly InitTool[] = ['claude'];
 export const DEFAULT_SCOPE: InitScope = 'project';
 
 const TOOL_LABELS = new Map(TOOL_SPECS.map((spec) => [spec.tool, spec.label]));
@@ -389,21 +390,14 @@ export function renderPlanSummary(
     'Planned changes:',
     ...steps.map((step) => {
       if (step.kind === 'command') {
-        return `- ${step.label}: run ${formatCommand(step.command)}`;
+        return `- ${step.label}: run command: ${formatCommand(step.command)}`;
       }
       if (step.kind === 'file') {
-        return `- ${step.label}: update ${step.path}`;
+        return `- ${step.label}: update file: ${step.path}`;
       }
       return `- ${step.label}: print manual Streamable HTTP settings`;
     }),
   ];
-
-  const postInstall = steps
-    .map((step) => step.postInstall)
-    .filter((value): value is string => Boolean(value));
-  if (postInstall.length > 0) {
-    lines.push('', 'After configuring:', ...postInstall.map((step) => `- ${step}`));
-  }
 
   return lines.join('\n');
 }
@@ -457,13 +451,30 @@ export async function runInitCommand(
   });
 
   const resultText = renderAppliedSteps(applied);
+  const manualText = renderManualSnippets(steps.filter((step) => step.kind === 'manual'));
+  const failedManualText = renderFailedManualSnippets(applied);
+  const postInstallText = renderPostInstallSteps(applied);
   if (interactive) {
-    outro(resultText);
+    const hasFailures = applied.some((step) => !step.ok);
+    if (hasFailures) {
+      log.warn(resultText);
+    } else {
+      log.success(resultText);
+    }
+    stdout.write(manualText);
+    stdout.write(failedManualText);
+    if (postInstallText) {
+      log.step(postInstallText);
+    }
+    outro(hasFailures ? 'Finished with issues' : 'Done');
   } else {
     stdout.write(`${resultText}\n`);
+    stdout.write(manualText);
+    stdout.write(failedManualText);
+    if (postInstallText) {
+      stdout.write(`\n${postInstallText}\n`);
+    }
   }
-  stdout.write(`${renderManualSnippets(steps.filter((step) => step.kind === 'manual'))}\n`);
-  stdout.write(`${renderFailedManualSnippets(applied)}\n`);
   printApiKeyReminder(options, env, stdout);
 
   const failures = applied.filter((step) => !step.ok);
@@ -568,17 +579,25 @@ async function applyInitPlan(
 
   for (const step of steps) {
     if (step.kind === 'manual') {
-      applied.push({ label: step.label, ok: true, message: 'Manual instructions printed.' });
+      applied.push({
+        label: step.label,
+        ok: true,
+        message: 'Manual instructions printed.',
+        postInstall: step.postInstall,
+      });
       continue;
     }
 
     if (step.kind === 'command') {
       const result = deps.runCommand(step.command);
+      const alreadyConfigured = !result.ok && isAlreadyConfiguredMessage(result.message);
+      const ok = result.ok || alreadyConfigured;
       applied.push({
         label: step.label,
-        ok: result.ok,
-        message: result.message,
-        manualSnippet: result.ok ? undefined : step.manualSnippet,
+        ok,
+        message: alreadyConfigured ? `Already configured: ${result.message}` : result.message,
+        manualSnippet: ok ? undefined : step.manualSnippet,
+        postInstall: ok ? step.postInstall : undefined,
       });
       continue;
     }
@@ -595,7 +614,12 @@ async function applyInitPlan(
       continue;
     }
     if (existing === next.content) {
-      applied.push({ label: step.label, ok: true, message: `Already up to date: ${step.path}` });
+      applied.push({
+        label: step.label,
+        ok: true,
+        message: `Already up to date: ${step.path}`,
+        postInstall: step.postInstall,
+      });
       continue;
     }
     mkdirSync(dirname(step.path), { recursive: true });
@@ -604,7 +628,12 @@ async function applyInitPlan(
       await copyFile(step.path, backupPath);
     }
     writeFileSync(step.path, next.content);
-    applied.push({ label: step.label, ok: true, message: `Updated ${step.path}` });
+    applied.push({
+      label: step.label,
+      ok: true,
+      message: `Updated ${step.path}`,
+      postInstall: step.postInstall,
+    });
   }
 
   return applied;
@@ -773,6 +802,21 @@ function renderFailedManualSnippets(steps: readonly AppliedStep[]): string {
   return snippets.length > 0 ? `\nManual fallback:\n\n${snippets.join('\n\n')}\n` : '';
 }
 
+function renderPostInstallSteps(steps: readonly AppliedStep[]): string {
+  const postInstall = Array.from(
+    new Set(
+      steps
+        .filter((step) => step.ok)
+        .map((step) => step.postInstall)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  return postInstall.length > 0
+    ? `After configuring:\n${postInstall.map((step) => `- ${step}`).join('\n')}`
+    : '';
+}
+
 function printApiKeyReminder(
   options: ResolvedInitOptions,
   env: Environment,
@@ -807,12 +851,20 @@ function runExternalCommand(command: readonly string[]): { ok: boolean; message:
     return { ok: false, message: result.error.message };
   }
   if (result.status !== 0) {
+    const message = result.stderr.trim() || result.stdout.trim() || `Exited with ${result.status}`;
+    if (isAlreadyConfiguredMessage(message)) {
+      return { ok: true, message: `Already configured: ${message}` };
+    }
     return {
       ok: false,
-      message: result.stderr.trim() || result.stdout.trim() || `Exited with ${result.status}`,
+      message,
     };
   }
   return { ok: true, message: `Ran ${formatCommand(command)}` };
+}
+
+function isAlreadyConfiguredMessage(message: string): boolean {
+  return /\balready (?:configured|exists|up to date)\b/i.test(message);
 }
 
 function formatCommand(command: readonly string[]): string {

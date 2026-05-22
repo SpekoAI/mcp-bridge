@@ -19,8 +19,8 @@ import {
 } from '../src/index.js';
 
 describe('spekoai-mcp init', () => {
-  it('preselects Claude Code and OpenCode in the interactive wizard', () => {
-    expect(DEFAULT_SELECTED_TOOLS).toEqual(['claude', 'opencode']);
+  it('preselects only Claude Code in the interactive wizard', () => {
+    expect(DEFAULT_SELECTED_TOOLS).toEqual(['claude']);
   });
 
   it('defaults the interactive scope prompt to the current project', () => {
@@ -301,6 +301,176 @@ url = "${DEFAULT_PUBLIC_MCP_URL}"
     }
   });
 
+  it('merges OpenCode project config instead of replacing existing servers', async () => {
+    const dir = mkTempDir();
+    const cwd = join(dir, 'project');
+    const home = join(dir, 'home');
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(
+      join(cwd, 'opencode.json'),
+      `{
+  "$schema": "https://opencode.ai/config.json",
+  "theme": "system",
+  "mcp": {
+    "github": {
+      "type": "remote",
+      "url": "https://example.test/mcp",
+      "enabled": true
+    }
+  }
+}
+`,
+    );
+
+    try {
+      await runInitCommand(
+        [
+          '--access',
+          'full',
+          '--auth',
+          'oauth',
+          '--tools',
+          'opencode',
+          '--scope',
+          'project',
+          '--yes',
+        ],
+        {
+          cwd,
+          homeDir: home,
+          env: {},
+          stdout: fakeWriteStream(),
+          stderr: fakeWriteStream(),
+          timestamp: () => '20260520T000000Z',
+        },
+      );
+
+      const updated = JSON.parse(readFileSync(join(cwd, 'opencode.json'), 'utf8')) as {
+        theme?: string;
+        mcp?: Record<string, { url?: string }>;
+      };
+      expect(updated.theme).toBe('system');
+      expect(updated.mcp?.github?.url).toBe('https://example.test/mcp');
+      expect(updated.mcp?.speko?.url).toBe(DEFAULT_AUTH_MCP_URL);
+      expect(existsSync(join(cwd, 'opencode.json.20260520T000000Z.bak'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints OAuth follow-up commands after applying changes', async () => {
+    const dir = mkTempDir();
+    const cwd = join(dir, 'project');
+    const home = join(dir, 'home');
+    mkdirSync(cwd, { recursive: true });
+    const stdout = capturingWriteStream();
+
+    try {
+      await runInitCommand(
+        [
+          '--access',
+          'full',
+          '--auth',
+          'oauth',
+          '--tools',
+          'opencode,codex',
+          '--scope',
+          'project',
+          '--yes',
+        ],
+        {
+          cwd,
+          homeDir: home,
+          env: {},
+          stdout,
+          stderr: fakeWriteStream(),
+          timestamp: () => '20260520T000000Z',
+        },
+      );
+
+      const output = stdout.output();
+      const firstResult = output.indexOf('OK OpenCode config:');
+      const nextSteps = output.indexOf('After configuring:');
+
+      expect(firstResult).toBeGreaterThanOrEqual(0);
+      expect(nextSteps).toBeGreaterThan(firstResult);
+      expect(output.slice(0, firstResult)).not.toContain('After configuring:');
+      expect(output).toContain('- Run: opencode mcp auth speko');
+      expect(output).toContain('- Run: codex mcp login speko');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats already-configured command steps as successful', async () => {
+    const dir = mkTempDir();
+    const stdout = capturingWriteStream();
+    const stderr = capturingWriteStream();
+
+    try {
+      await runInitCommand(
+        ['--access', 'full', '--auth', 'oauth', '--tools', 'claude', '--scope', 'project', '--yes'],
+        {
+          cwd: join(dir, 'project'),
+          homeDir: join(dir, 'home'),
+          env: {},
+          stdout,
+          stderr,
+          runCommand: () => ({
+            ok: false,
+            message: 'MCP server speko already exists in .mcp.json',
+          }),
+        },
+      );
+
+      expect(stdout.output()).toContain(
+        'OK Claude Code: Already configured: MCP server speko already exists in .mcp.json',
+      );
+      expect(stdout.output()).toContain('After configuring:');
+      expect(stdout.output()).toContain('- In Claude Code, run /mcp and complete sign-in.');
+      expect(stdout.output()).not.toContain('Manual fallback:');
+      expect(stderr.output()).not.toContain(
+        'Some selected tools were not configured automatically',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('labels planned actions separately from commands and paths', async () => {
+    const dir = mkTempDir();
+    const stdout = capturingWriteStream();
+
+    try {
+      await runInitCommand(
+        [
+          '--dry-run',
+          '--access',
+          'full',
+          '--auth',
+          'oauth',
+          '--tools',
+          'claude,opencode',
+          '--scope',
+          'project',
+          '--yes',
+        ],
+        {
+          cwd: join(dir, 'project'),
+          homeDir: join(dir, 'home'),
+          env: {},
+          stdout,
+          stderr: fakeWriteStream(),
+        },
+      );
+
+      expect(stdout.output()).toContain('- Claude Code: run command: claude mcp add');
+      expect(stdout.output()).toContain('- OpenCode config: update file:');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('builds a manual Claude API-key step instead of writing a secret', () => {
     const options: ResolvedInitOptions = {
       access: 'full',
@@ -327,9 +497,22 @@ function mkTempDir(): string {
   return join(tmpdir(), `spekoai-mcp-${Math.random().toString(16).slice(2)}`);
 }
 
-function fakeWriteStream(): NodeJS.WriteStream {
+function fakeWriteStream(onWrite?: (chunk: string) => void): NodeJS.WriteStream {
   return {
     isTTY: false,
-    write: () => true,
+    write: (chunk: string | Uint8Array) => {
+      onWrite?.(String(chunk));
+      return true;
+    },
   } as NodeJS.WriteStream;
+}
+
+function capturingWriteStream(): NodeJS.WriteStream & { output: () => string } {
+  let output = '';
+  return Object.assign(
+    fakeWriteStream((chunk) => (output += chunk)),
+    {
+      output: () => output,
+    },
+  );
 }
