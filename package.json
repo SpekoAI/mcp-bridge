@@ -1,0 +1,78 @@
+{
+  "name": "@spekoai/mcp",
+  "version": "1.0.9",
+  "description": "Local stdio bridge for the hosted SpekoAI MCP server",
+  "mcpName": "ai.speko/mcp",
+  "license": "MIT",
+  "author": "Speko",
+  "homepage": "https://github.com/SpekoAI/mcp-bridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SpekoAI/mcp-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SpekoAI/mcp-bridge/issues"
+  },
+  "keywords": [
+    "speko",
+    "spekoai",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "stdio",
+    "claude",
+    "cursor",
+    "voice-ai",
+    "voice-agent",
+    "stt",
+    "tts",
+    "speech-to-text",
+    "text-to-speech",
+    "failover",
+    "fallback",
+    "multilingual",
+    "elevenlabs",
+    "deepgram",
+    "cartesia",
+    "openrouter"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "spekoai-mcp": "dist/index.js"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@spekoai/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.4.0",
+    "jsonc-parser": "^3.3.1",
+    "mcp-remote": "^0.1.38",
+    "smol-toml": "^1.6.1",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25",
+    "typescript": "~6.0.3",
+    "vitest": "~4.1.6"
+  }
+}
