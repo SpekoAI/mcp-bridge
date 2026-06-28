@@ -1,6 +1,6 @@
 {
   "name": "@spekoai/mcp",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Local stdio bridge for the hosted SpekoAI MCP server",
   "mcpName": "ai.speko/mcp",
   "license": "MIT",
