@@ -6,6 +6,23 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AUTH_HEADER_ENV, DEFAULT_AUTH_MCP_URL, type Environment } from './constants.js';
 import { runInitCommand } from './init.js';
 
+export type { DetectCtx } from './detect.js';
+export {
+  claudeDesktopConfigPath,
+  clineSettingsPath,
+  detectInstalledTools,
+  realDetectCtx,
+  vscodeUserDir,
+  windsurfDir,
+  zedSettingsPath,
+} from './detect.js';
+export {
+  GUIDANCE_BEGIN,
+  GUIDANCE_CARD,
+  GUIDANCE_END,
+  standaloneGuidanceContent,
+  upsertGuidanceBlock,
+} from './guidance.js';
 export type {
   InitAuth,
   InitScope,
@@ -15,10 +32,13 @@ export type {
   ResolvedInitOptions,
 } from './init.js';
 export {
+  bridgeServerEntry,
+  buildBridgeMcpServersConfig,
   buildCodexConfig,
   buildCursorConfig,
   buildInitPlan,
   buildOpenCodeConfig,
+  buildVsCodeConfig,
   completeInitArgs,
   DEFAULT_SCOPE,
   DEFAULT_SELECTED_TOOLS,

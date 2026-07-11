@@ -13,13 +13,19 @@ npx @spekoai/mcp@latest init
 ```
 
 The package exposes the `spekoai-mcp` binary. Run `init` for a guided setup
-wizard that can configure Claude Code, Codex, OpenCode, Cursor, and generic MCP
-clients.
+wizard: it detects which coding agents are installed (Claude Code, Claude
+Desktop, Codex, OpenCode, Cursor, Windsurf, VS Code, Gemini CLI, Cline, Zed)
+and preselects them, then writes each agent's config in its own convention —
+remote HTTP where the agent supports it, the local stdio `bridge` where it
+does not. Agents with a global rules file (Codex, Gemini CLI, Windsurf, Cline,
+VS Code) also get a short Speko usage guide in that convention.
 
-For scripted setup, pass the choices explicitly:
+For scripted setup, pass the choices explicitly (`--tools all` configures
+every detected agent):
 
 ```bash
-npx @spekoai/mcp@latest init --auth oauth --tools claude,codex --scope user --yes
+npx @spekoai/mcp@latest init --auth oauth --tools all --scope user --yes
+npx @spekoai/mcp@latest init --auth oauth --tools claude,cursor,windsurf --scope user --yes
 ```
 
 ## Bridge

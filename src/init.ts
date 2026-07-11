@@ -7,16 +7,44 @@ import { confirm, intro, isCancel, log, multiselect, note, outro, select } from 
 import { applyEdits, modify, type ParseError, parse as parseJsonc } from 'jsonc-parser';
 import { parse as parseToml } from 'smol-toml';
 import { DEFAULT_AUTH_MCP_URL, type Environment } from './constants.js';
+import {
+  claudeDesktopConfigPath,
+  clineSettingsPath,
+  type DetectCtx,
+  detectInstalledTools,
+  realDetectCtx,
+  vscodeUserDir,
+  windsurfDir,
+  zedSettingsPath,
+} from './detect.js';
+import {
+  standaloneGuidanceContent,
+  upsertGuidanceBlock,
+  VSCODE_INSTRUCTIONS_FRONTMATTER,
+} from './guidance.js';
 
 export type InitAuth = 'oauth' | 'api-key';
 export type InitScope = 'user' | 'project';
-export type InitTool = 'claude' | 'codex' | 'opencode' | 'cursor' | 'other';
+export type InitTool =
+  | 'claude'
+  | 'claude-desktop'
+  | 'codex'
+  | 'opencode'
+  | 'cursor'
+  | 'windsurf'
+  | 'vscode'
+  | 'gemini'
+  | 'cline'
+  | 'zed'
+  | 'other';
 
 type InitArgValue = string | boolean;
 
 export type ParsedInitArgs = {
   auth?: InitAuth;
   tools?: InitTool[];
+  /** `--tools all`: resolve to the detected agent set at run time. */
+  toolsAll?: boolean;
   scope?: InitScope;
   dryRun: boolean;
   yes: boolean;
@@ -34,6 +62,10 @@ export type ResolvedInitOptions = {
 export type InitPaths = {
   homeDir: string;
   cwd: string;
+  /** Platform for per-vendor config paths (Claude Desktop, VS Code, Cline, Zed). */
+  platform?: NodeJS.Platform;
+  /** Env for per-vendor path overrides (APPDATA) and API-key interpolation. */
+  env?: Environment;
 };
 
 export type FileUpdateResult =
@@ -56,7 +88,7 @@ export type PlannedInitStep =
     }
   | {
       kind: 'file';
-      tool: 'codex' | 'opencode' | 'cursor';
+      tool: Exclude<InitTool, 'other'>;
       label: string;
       path: string;
       build: (existing: string | undefined) => FileUpdateResult;
@@ -88,13 +120,21 @@ type InitDependencies = {
   stderr?: NodeJS.WriteStream;
   timestamp?: () => string;
   runCommand?: (command: readonly string[]) => { ok: boolean; message: string };
+  /** Agent-detection probes — injectable so tests never touch the real machine. */
+  detect?: DetectCtx;
 };
 
 const TOOL_SPECS: readonly ToolSpec[] = [
   { tool: 'claude', label: 'Claude Code' },
+  { tool: 'claude-desktop', label: 'Claude Desktop' },
   { tool: 'codex', label: 'Codex' },
   { tool: 'opencode', label: 'OpenCode' },
   { tool: 'cursor', label: 'Cursor' },
+  { tool: 'windsurf', label: 'Windsurf' },
+  { tool: 'vscode', label: 'VS Code' },
+  { tool: 'gemini', label: 'Gemini CLI' },
+  { tool: 'cline', label: 'Cline' },
+  { tool: 'zed', label: 'Zed' },
   { tool: 'other', label: 'Other clients' },
 ];
 
@@ -105,11 +145,14 @@ const TOOL_LABELS = new Map(TOOL_SPECS.map((spec) => [spec.tool, spec.label]));
 
 export const INIT_HELP_TEXT = `Usage: spekoai-mcp init [options]
 
-Configure Speko MCP in Claude Code, Codex, OpenCode, Cursor, or another MCP client.
+Configure Speko MCP in your coding agents. Detects what is installed (Claude
+Code/Desktop, Codex, OpenCode, Cursor, Windsurf, VS Code, Gemini CLI, Cline,
+Zed) and writes each agent's config in its own convention.
 
 Options:
   --auth <oauth|api-key>      Authentication mode for ${DEFAULT_AUTH_MCP_URL}.
-  --tools <list>              Comma-separated tools: claude,codex,opencode,cursor,other
+  --tools <list|all>          "all" = every detected agent, or a comma list:
+                              claude,claude-desktop,codex,opencode,cursor,windsurf,vscode,gemini,cline,zed,other
   --scope <user|project>      Install globally for the user or in the current project.
   --dry-run                   Print the planned changes without writing files or running commands.
   --yes                       Skip the final confirmation prompt.
@@ -117,8 +160,8 @@ Options:
 
 Examples:
   spekoai-mcp init
-  spekoai-mcp init --dry-run --auth oauth --tools cursor --scope project --yes
-  spekoai-mcp init --auth oauth --tools claude,codex --scope user --yes
+  spekoai-mcp init --auth oauth --tools all --scope user --yes
+  spekoai-mcp init --dry-run --auth oauth --tools cursor,windsurf --scope project --yes
 `;
 
 export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
@@ -144,7 +187,7 @@ export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
         index += 1;
         break;
       case '--tools':
-        parsed.tools = parseTools(readFlagValue(argv, index, arg));
+        applyToolsFlag(parsed, readFlagValue(argv, index, arg));
         index += 1;
         break;
       case '--scope':
@@ -155,7 +198,7 @@ export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
         if (arg.startsWith('--auth=')) {
           parsed.auth = parseAuth(readInlineFlagValue(arg));
         } else if (arg.startsWith('--tools=')) {
-          parsed.tools = parseTools(readInlineFlagValue(arg));
+          applyToolsFlag(parsed, readInlineFlagValue(arg));
         } else if (arg.startsWith('--scope=')) {
           parsed.scope = parseScope(readInlineFlagValue(arg));
         } else {
@@ -167,10 +210,13 @@ export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
   return parsed;
 }
 
-export function completeInitArgs(parsed: ParsedInitArgs): ResolvedInitOptions {
+export function completeInitArgs(
+  parsed: ParsedInitArgs,
+  detected: readonly InitTool[] = [],
+): ResolvedInitOptions {
   const missing: string[] = [];
   if (!parsed.auth) missing.push('--auth');
-  if (!parsed.tools?.length) missing.push('--tools');
+  if (!parsed.toolsAll && !parsed.tools?.length) missing.push('--tools');
   if (!parsed.scope) missing.push('--scope');
   if (!parsed.dryRun && !parsed.yes) missing.push('--yes or --dry-run');
 
@@ -183,8 +229,13 @@ export function completeInitArgs(parsed: ParsedInitArgs): ResolvedInitOptions {
   }
 
   const auth = parsed.auth;
-  const tools = parsed.tools;
+  const tools = parsed.toolsAll ? [...detected] : parsed.tools;
   const scope = parsed.scope;
+  if (parsed.toolsAll && (!tools || tools.length === 0)) {
+    throw new Error(
+      '--tools all found no supported coding agents on this machine. Name them explicitly, e.g. --tools claude,cursor.',
+    );
+  }
   if (!auth || !tools?.length || !scope) {
     throw new Error('spekoai-mcp init options are incomplete.');
   }
@@ -300,14 +351,189 @@ export function buildCodexConfig(
   return { ok: true, content };
 }
 
+/**
+ * The stdio-bridge server entry for agents that cannot talk to a remote HTTP
+ * MCP directly (Claude Desktop, Windsurf, Gemini CLI, Cline, Zed). One source
+ * of truth so no agent can be handed a different invocation than the others.
+ *
+ * Auth: with OAuth the bridge's mcp-remote proxy runs the browser sign-in on
+ * first connect (no secret in the file). With API-key auth we interpolate the
+ * key from SPEKO_API_KEY when it's set in the current environment (GUI apps
+ * don't inherit shell exports, so an env-var reference would silently fail);
+ * when unset, a placeholder + edit instruction is the honest fallback.
+ */
+export function bridgeServerEntry(
+  apiKeyAuth: boolean,
+  env: Environment = {},
+): Record<string, unknown> {
+  const entry: Record<string, unknown> = {
+    command: 'npx',
+    args: ['-y', '@spekoai/mcp', 'bridge'],
+  };
+  if (apiKeyAuth) {
+    entry['env'] = { SPEKO_API_KEY: env.SPEKO_API_KEY?.trim() || 'sk_live_xxx' };
+  }
+  return entry;
+}
+
+/** True when an API-key config had to be written with the sk_live_xxx placeholder. */
+function usedKeyPlaceholder(apiKeyAuth: boolean, env: Environment): boolean {
+  return apiKeyAuth && !env.SPEKO_API_KEY?.trim();
+}
+
+/** Windsurf, Gemini CLI, Claude Desktop: standard `mcpServers` JSON with a stdio bridge entry. */
+export function buildBridgeMcpServersConfig(
+  existing: string | undefined,
+  apiKeyAuth: boolean,
+  env: Environment,
+  extraFields: Record<string, unknown> = {},
+): FileUpdateResult {
+  const server = { ...bridgeServerEntry(apiKeyAuth, env), ...extraFields };
+  return updateJsonc(
+    existing,
+    ['mcpServers', 'speko'],
+    server,
+    bridgeMcpServersSnippet(apiKeyAuth, env, extraFields),
+  );
+}
+
+/**
+ * VS Code (GitHub Copilot agent mode): native remote HTTP support via the
+ * user-profile `mcp.json` — root key is `servers` (not `mcpServers`) and the
+ * entry carries an explicit `"type": "http"`. OAuth is handled by VS Code
+ * itself; API-key auth uses VS Code's `${env:VAR}` interpolation.
+ */
+export function buildVsCodeConfig(
+  existing: string | undefined,
+  endpoint: string,
+  apiKeyAuth: boolean,
+): FileUpdateResult {
+  const server = apiKeyAuth
+    ? {
+        type: 'http',
+        url: endpoint,
+        headers: {
+          Authorization: `Bearer $${'{env:SPEKO_API_KEY}'}`,
+        },
+      }
+    : { type: 'http', url: endpoint };
+
+  return updateJsonc(existing, ['servers', 'speko'], server, vscodeSnippet(endpoint, apiKeyAuth));
+}
+
 export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): PlannedInitStep[] {
   const endpoint = DEFAULT_AUTH_MCP_URL;
   const apiKeyAuth = isApiKeyAuth(options);
+  const env = paths.env ?? {};
+  const platform = paths.platform ?? process.platform;
+  const pathCtx = { homeDir: paths.homeDir, platform, env };
+  const bridgePostInstall = apiKeyAuth
+    ? usedKeyPlaceholder(apiKeyAuth, env)
+      ? 'Replace sk_live_xxx in the written config with your real SPEKO_API_KEY.'
+      : undefined
+    : 'First connect runs a browser sign-in to Speko (mcp-remote OAuth).';
   const steps: PlannedInitStep[] = [];
 
   for (const tool of options.tools) {
     if (tool === 'claude') {
       steps.push(buildClaudeStep(options, endpoint, apiKeyAuth));
+    } else if (tool === 'claude-desktop') {
+      steps.push({
+        kind: 'file',
+        tool,
+        label: 'Claude Desktop config',
+        path: claudeDesktopConfigPath(pathCtx),
+        build: (existing) => buildBridgeMcpServersConfig(existing, apiKeyAuth, env),
+        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env),
+        postInstall:
+          bridgePostInstall ?? 'Fully quit (Cmd/Ctrl+Q) and reopen Claude Desktop for it to load.',
+      });
+    } else if (tool === 'windsurf') {
+      steps.push({
+        kind: 'file',
+        tool,
+        label: 'Windsurf config',
+        path: join(windsurfDir(pathCtx), 'mcp_config.json'),
+        build: (existing) => buildBridgeMcpServersConfig(existing, apiKeyAuth, env),
+        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env),
+        postInstall: bridgePostInstall,
+      });
+      steps.push(
+        guidanceAppendStep(
+          tool,
+          'Windsurf usage guide',
+          join(windsurfDir(pathCtx), 'memories', 'global_rules.md'),
+        ),
+      );
+    } else if (tool === 'vscode') {
+      steps.push({
+        kind: 'file',
+        tool,
+        label: 'VS Code config',
+        path: join(vscodeUserDir(pathCtx), 'mcp.json'),
+        build: (existing) => buildVsCodeConfig(existing, endpoint, apiKeyAuth),
+        manualSnippet: vscodeSnippet(endpoint, apiKeyAuth),
+        postInstall: 'Reload the VS Code window to load it.',
+      });
+      steps.push(
+        guidanceFileStep(
+          tool,
+          'VS Code usage guide',
+          join(vscodeUserDir(pathCtx), 'prompts', 'speko-mcp.instructions.md'),
+          VSCODE_INSTRUCTIONS_FRONTMATTER,
+        ),
+      );
+    } else if (tool === 'gemini') {
+      steps.push({
+        kind: 'file',
+        tool,
+        label: 'Gemini CLI config',
+        path: join(paths.homeDir, '.gemini', 'settings.json'),
+        build: (existing) => buildBridgeMcpServersConfig(existing, apiKeyAuth, env),
+        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env),
+        postInstall: bridgePostInstall,
+      });
+      steps.push(
+        guidanceAppendStep(
+          tool,
+          'Gemini CLI usage guide',
+          join(paths.homeDir, '.gemini', 'GEMINI.md'),
+        ),
+      );
+    } else if (tool === 'cline') {
+      steps.push({
+        kind: 'file',
+        tool,
+        label: 'Cline config',
+        path: clineSettingsPath(pathCtx),
+        build: (existing) =>
+          buildBridgeMcpServersConfig(existing, apiKeyAuth, env, {
+            disabled: false,
+            autoApprove: [],
+          }),
+        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env, {
+          disabled: false,
+          autoApprove: [],
+        }),
+        postInstall: bridgePostInstall,
+      });
+      steps.push(
+        guidanceFileStep(
+          tool,
+          'Cline usage guide',
+          join(paths.homeDir, 'Documents', 'Cline', 'Rules', 'speko-mcp.md'),
+        ),
+      );
+    } else if (tool === 'zed') {
+      // Zed's settings.json is user-owned JSONC that commonly carries comments
+      // and trailing structure — a merge gone wrong bricks the editor config,
+      // so Zed stays a printed snippet (same call the calls wizard made).
+      steps.push({
+        kind: 'manual',
+        tool,
+        label: 'Zed',
+        manualSnippet: zedSnippet(apiKeyAuth, env, zedSettingsPath(pathCtx)),
+      });
     } else if (tool === 'codex') {
       steps.push({
         kind: 'file',
@@ -318,6 +544,9 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         manualSnippet: codexSnippet(endpoint, apiKeyAuth),
         postInstall: !apiKeyAuth ? 'Run: codex mcp login speko' : undefined,
       });
+      steps.push(
+        guidanceAppendStep(tool, 'Codex usage guide', join(paths.homeDir, '.codex', 'AGENTS.md')),
+      );
     } else if (tool === 'opencode') {
       const configPath =
         options.scope === 'user'
@@ -397,11 +626,25 @@ export async function runInitCommand(
     return;
   }
 
+  const homeDir = deps.homeDir ?? env.HOME ?? homedir();
   const interactive = Boolean((deps.stdin ?? process.stdin).isTTY && stdout.isTTY);
-  const options = interactive ? await promptForMissingOptions(parsed) : completeInitArgs(parsed);
+
+  // Detect installed agents when the selection depends on it: the interactive
+  // multiselect preselects the detected set, and non-interactive `--tools all`
+  // resolves to exactly that set. Explicit `--tools a,b` runs skip the probes
+  // entirely (they spawn real CLIs), keeping scripted runs fast and hermetic.
+  const detectCtx = deps.detect ?? realDetectCtx(homeDir, env);
+  const needsDetection = interactive || parsed.toolsAll === true;
+  const detected = needsDetection ? detectInstalledTools(detectCtx) : [];
+
+  const options = interactive
+    ? await promptForMissingOptions(parsed, detected)
+    : completeInitArgs(parsed, detected);
   const paths = {
-    homeDir: deps.homeDir ?? env.HOME ?? homedir(),
+    homeDir,
     cwd: deps.cwd ?? process.cwd(),
+    platform: detectCtx.platform,
+    env,
   };
   const steps = buildInitPlan(options, paths);
   const summary = renderPlanSummary(options, steps);
@@ -466,8 +709,14 @@ export async function runInitCommand(
   }
 }
 
-async function promptForMissingOptions(parsed: ParsedInitArgs): Promise<ResolvedInitOptions> {
+async function promptForMissingOptions(
+  parsed: ParsedInitArgs,
+  detected: readonly InitTool[] = [],
+): Promise<ResolvedInitOptions> {
   intro('Configure Speko MCP');
+  if (detected.length > 0) {
+    log.info(`Detected: ${detected.map((tool) => TOOL_LABELS.get(tool) ?? tool).join(', ')}`);
+  }
 
   const auth =
     parsed.auth ??
@@ -481,14 +730,28 @@ async function promptForMissingOptions(parsed: ParsedInitArgs): Promise<Resolved
       }),
     ));
 
+  const detectedSet = new Set(detected);
+  // `--tools all` resolves to the detected set; with nothing detected it falls
+  // through to the multiselect instead of silently configuring nothing.
+  const toolsFromArgs = parsed.toolsAll
+    ? detected.length > 0
+      ? [...detected]
+      : undefined
+    : parsed.tools;
   const tools =
-    parsed.tools ??
+    toolsFromArgs ??
     (await promptValue<InitTool[]>(
       multiselect({
         message: 'Which coding tools should be configured?',
         required: true,
-        initialValues: [...DEFAULT_SELECTED_TOOLS],
-        options: TOOL_SPECS.map((spec) => ({ value: spec.tool, label: spec.label })),
+        // Preselect what's installed; a machine with nothing detected falls
+        // back to the historical Claude Code default.
+        initialValues: detected.length > 0 ? [...detected] : [...DEFAULT_SELECTED_TOOLS],
+        options: TOOL_SPECS.map((spec) => ({
+          value: spec.tool,
+          label: spec.label,
+          ...(detectedSet.has(spec.tool) ? { hint: 'detected' } : {}),
+        })),
       }),
     ));
 
@@ -734,6 +997,89 @@ URL: ${endpoint}
 ${auth}`;
 }
 
+/** Marker-append guidance into a rules file the USER owns (Codex AGENTS.md, GEMINI.md, global_rules.md). */
+function guidanceAppendStep(
+  tool: Exclude<InitTool, 'other'>,
+  label: string,
+  path: string,
+): PlannedInitStep {
+  return {
+    kind: 'file',
+    tool,
+    label,
+    path,
+    build: (existing) => ({ ok: true, content: upsertGuidanceBlock(existing ?? '') }),
+    manualSnippet: upsertGuidanceBlock(''),
+  };
+}
+
+/** Standalone guidance file WE own (Cline rules dir, VS Code instructions dir) — plain overwrite. */
+function guidanceFileStep(
+  tool: Exclude<InitTool, 'other'>,
+  label: string,
+  path: string,
+  frontmatter?: string,
+): PlannedInitStep {
+  return {
+    kind: 'file',
+    tool,
+    label,
+    path,
+    build: () => ({ ok: true, content: standaloneGuidanceContent(frontmatter) }),
+    manualSnippet: standaloneGuidanceContent(frontmatter),
+  };
+}
+
+function bridgeMcpServersSnippet(
+  apiKeyAuth: boolean,
+  env: Environment,
+  extraFields: Record<string, unknown> = {},
+): string {
+  const server = { ...bridgeServerEntry(apiKeyAuth, env), ...extraFields };
+  return JSON.stringify({ mcpServers: { speko: server } }, null, 2);
+}
+
+function vscodeSnippet(endpoint: string, apiKeyAuth: boolean): string {
+  const server = apiKeyAuth
+    ? `{
+      "type": "http",
+      "url": "${endpoint}",
+      "headers": {
+        "Authorization": "Bearer $${'{env:SPEKO_API_KEY}'}"
+      }
+    }`
+    : `{
+      "type": "http",
+      "url": "${endpoint}"
+    }`;
+
+  return `{
+  "servers": {
+    "speko": ${server}
+  }
+}`;
+}
+
+function zedSnippet(apiKeyAuth: boolean, env: Environment, settingsPath: string): string {
+  const entry = bridgeServerEntry(apiKeyAuth, env) as {
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+  };
+  const contextServer = {
+    context_servers: {
+      speko: {
+        command: {
+          path: entry.command,
+          args: entry.args,
+          ...(entry.env ? { env: entry.env } : {}),
+        },
+      },
+    },
+  };
+  return `Add to ${settingsPath}:\n${JSON.stringify(contextServer, null, 2)}`;
+}
+
 function renderManualSnippets(steps: readonly PlannedInitStep[]): string {
   const snippets = steps
     .filter((step) => step.kind === 'manual')
@@ -870,6 +1216,15 @@ function parseScope(value: string): InitScope {
   throw new Error(`Invalid --scope value: ${value}`);
 }
 
+/** `--tools all` toggles run-time detection; anything else is a forced comma list. */
+function applyToolsFlag(parsed: ParsedInitArgs, value: string): void {
+  if (value.trim().toLowerCase() === 'all') {
+    parsed.toolsAll = true;
+    return;
+  }
+  parsed.tools = parseTools(value);
+}
+
 function parseTools(value: string): InitTool[] {
   const tools = value
     .split(',')
@@ -883,9 +1238,23 @@ function parseTools(value: string): InitTool[] {
   return Array.from(new Set(tools));
 }
 
+const TOOL_ALIASES: Record<string, InitTool> = {
+  'claude-code': 'claude',
+  claude_code: 'claude',
+  desktop: 'claude-desktop',
+  claude_desktop: 'claude-desktop',
+  'vs-code': 'vscode',
+  vs_code: 'vscode',
+  code: 'vscode',
+  'gemini-cli': 'gemini',
+  gemini_cli: 'gemini',
+};
+
 function normalizeTool(value: string): InitTool | undefined {
   if (!value) return undefined;
-  if (value === 'claude-code' || value === 'claude_code') return 'claude';
-  if (TOOL_LABELS.has(value as InitTool)) return value as InitTool;
+  const lowered = value.toLowerCase();
+  const alias = TOOL_ALIASES[lowered];
+  if (alias) return alias;
+  if (TOOL_LABELS.has(lowered as InitTool)) return lowered as InitTool;
   throw new Error(`Invalid tool: ${value}`);
 }
