@@ -631,7 +631,7 @@ describe('multi-agent target configs', () => {
     const apiKey = buildVsCodeConfig(undefined, DEFAULT_AUTH_MCP_URL, true);
     if (!apiKey.ok) throw new Error(apiKey.reason);
     expect(JSON.parse(apiKey.content).servers.speko.headers.Authorization).toBe(
-      'Bearer ${env:SPEKO_API_KEY}',
+      `Bearer \${env:SPEKO_API_KEY}`,
     );
   });
 
