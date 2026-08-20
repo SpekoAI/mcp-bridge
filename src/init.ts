@@ -142,6 +142,8 @@ export const DEFAULT_SELECTED_TOOLS: readonly InitTool[] = ['claude'];
 export const DEFAULT_SCOPE: InitScope = 'project';
 
 const TOOL_LABELS = new Map(TOOL_SPECS.map((spec) => [spec.tool, spec.label]));
+const API_KEY_ENV_REFERENCE = '$' + '{env:SPEKO_API_KEY}';
+const API_KEY_SHELL_REFERENCE = '$' + '{SPEKO_API_KEY}';
 
 export const INIT_HELP_TEXT = `Usage: spekoai-mcp init [options]
 
@@ -161,7 +163,7 @@ Options:
 Examples:
   spekoai-mcp init
   spekoai-mcp init --auth oauth --tools all --scope user --yes
-  spekoai-mcp init --dry-run --auth oauth --tools cursor,windsurf --scope project --yes
+  spekoai-mcp init --dry-run --auth api-key --tools cursor,windsurf --scope project --yes
 `;
 
 export function parseInitArgs(argv: readonly string[]): ParsedInitArgs {
@@ -351,57 +353,37 @@ export function buildCodexConfig(
   return { ok: true, content };
 }
 
-/**
- * The stdio-bridge server entry for agents that cannot talk to a remote HTTP
- * MCP directly (Claude Desktop, Windsurf, Gemini CLI, Cline, Zed). One source
- * of truth so no agent can be handed a different invocation than the others.
- *
- * Auth: with OAuth the bridge's mcp-remote proxy runs the browser sign-in on
- * first connect (no secret in the file). With API-key auth we interpolate the
- * key from SPEKO_API_KEY when it's set in the current environment (GUI apps
- * don't inherit shell exports, so an env-var reference would silently fail);
- * when unset, a placeholder + edit instruction is the honest fallback.
- */
-export function bridgeServerEntry(
-  apiKeyAuth: boolean,
-  env: Environment = {},
-): Record<string, unknown> {
-  const entry: Record<string, unknown> = {
-    command: 'npx',
-    args: ['-y', '@spekoai/mcp', 'bridge'],
-  };
-  if (apiKeyAuth) {
-    entry['env'] = { SPEKO_API_KEY: env.SPEKO_API_KEY?.trim() || 'sk_live_xxx' };
-  }
-  return entry;
+/** Standard direct HTTP entry for clients using `mcpServers` JSON. */
+export function httpServerEntry(endpoint: string, apiKeyAuth: boolean): Record<string, unknown> {
+  return apiKeyAuth
+    ? {
+        type: 'http',
+        url: endpoint,
+        headers: { Authorization: `Bearer ${API_KEY_ENV_REFERENCE}` },
+      }
+    : { type: 'http', url: endpoint };
 }
 
-/** True when an API-key config had to be written with the sk_live_xxx placeholder. */
-function usedKeyPlaceholder(apiKeyAuth: boolean, env: Environment): boolean {
-  return apiKeyAuth && !env.SPEKO_API_KEY?.trim();
-}
-
-/** Windsurf, Gemini CLI, Claude Desktop: standard `mcpServers` JSON with a stdio bridge entry. */
-export function buildBridgeMcpServersConfig(
+export function buildHttpMcpServersConfig(
   existing: string | undefined,
+  endpoint: string,
   apiKeyAuth: boolean,
-  env: Environment,
   extraFields: Record<string, unknown> = {},
 ): FileUpdateResult {
-  const server = { ...bridgeServerEntry(apiKeyAuth, env), ...extraFields };
+  const server = { ...httpServerEntry(endpoint, apiKeyAuth), ...extraFields };
   return updateJsonc(
     existing,
     ['mcpServers', 'speko'],
     server,
-    bridgeMcpServersSnippet(apiKeyAuth, env, extraFields),
+    httpMcpServersSnippet(endpoint, apiKeyAuth, extraFields),
   );
 }
 
 /**
  * VS Code (GitHub Copilot agent mode): native remote HTTP support via the
  * user-profile `mcp.json` — root key is `servers` (not `mcpServers`) and the
- * entry carries an explicit `"type": "http"`. OAuth is handled by VS Code
- * itself; API-key auth uses VS Code's `${env:VAR}` interpolation.
+ * entry carries an explicit `"type": "http"`. API-key auth uses VS Code's
+ * `${env:VAR}` interpolation.
  */
 export function buildVsCodeConfig(
   existing: string | undefined,
@@ -424,14 +406,8 @@ export function buildVsCodeConfig(
 export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): PlannedInitStep[] {
   const endpoint = DEFAULT_AUTH_MCP_URL;
   const apiKeyAuth = isApiKeyAuth(options);
-  const env = paths.env ?? {};
   const platform = paths.platform ?? process.platform;
-  const pathCtx = { homeDir: paths.homeDir, platform, env };
-  const bridgePostInstall = apiKeyAuth
-    ? usedKeyPlaceholder(apiKeyAuth, env)
-      ? 'Replace sk_live_xxx in the written config with your real SPEKO_API_KEY.'
-      : undefined
-    : 'First connect runs a browser sign-in to Speko (mcp-remote OAuth).';
+  const pathCtx = { homeDir: paths.homeDir, platform, env: paths.env ?? {} };
   const steps: PlannedInitStep[] = [];
 
   for (const tool of options.tools) {
@@ -443,10 +419,11 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         tool,
         label: 'Claude Desktop config',
         path: claudeDesktopConfigPath(pathCtx),
-        build: (existing) => buildBridgeMcpServersConfig(existing, apiKeyAuth, env),
-        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env),
-        postInstall:
-          bridgePostInstall ?? 'Fully quit (Cmd/Ctrl+Q) and reopen Claude Desktop for it to load.',
+        build: (existing) => buildHttpMcpServersConfig(existing, endpoint, apiKeyAuth),
+        manualSnippet: httpMcpServersSnippet(endpoint, apiKeyAuth),
+        postInstall: apiKeyAuth
+          ? 'Fully quit (Cmd/Ctrl+Q) and reopen Claude Desktop for it to load.'
+          : 'Reopen Claude Desktop and complete the browser sign-in on first connect.',
       });
     } else if (tool === 'windsurf') {
       steps.push({
@@ -454,9 +431,8 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         tool,
         label: 'Windsurf config',
         path: join(windsurfDir(pathCtx), 'mcp_config.json'),
-        build: (existing) => buildBridgeMcpServersConfig(existing, apiKeyAuth, env),
-        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env),
-        postInstall: bridgePostInstall,
+        build: (existing) => buildHttpMcpServersConfig(existing, endpoint, apiKeyAuth),
+        manualSnippet: httpMcpServersSnippet(endpoint, apiKeyAuth),
       });
       steps.push(
         guidanceAppendStep(
@@ -489,9 +465,8 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         tool,
         label: 'Gemini CLI config',
         path: join(paths.homeDir, '.gemini', 'settings.json'),
-        build: (existing) => buildBridgeMcpServersConfig(existing, apiKeyAuth, env),
-        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env),
-        postInstall: bridgePostInstall,
+        build: (existing) => buildHttpMcpServersConfig(existing, endpoint, apiKeyAuth),
+        manualSnippet: httpMcpServersSnippet(endpoint, apiKeyAuth),
       });
       steps.push(
         guidanceAppendStep(
@@ -507,15 +482,14 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         label: 'Cline config',
         path: clineSettingsPath(pathCtx),
         build: (existing) =>
-          buildBridgeMcpServersConfig(existing, apiKeyAuth, env, {
+          buildHttpMcpServersConfig(existing, endpoint, apiKeyAuth, {
             disabled: false,
             autoApprove: [],
           }),
-        manualSnippet: bridgeMcpServersSnippet(apiKeyAuth, env, {
+        manualSnippet: httpMcpServersSnippet(endpoint, apiKeyAuth, {
           disabled: false,
           autoApprove: [],
         }),
-        postInstall: bridgePostInstall,
       });
       steps.push(
         guidanceFileStep(
@@ -532,7 +506,7 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         kind: 'manual',
         tool,
         label: 'Zed',
-        manualSnippet: zedSnippet(apiKeyAuth, env, zedSettingsPath(pathCtx)),
+        manualSnippet: zedSnippet(endpoint, zedSettingsPath(pathCtx), apiKeyAuth),
       });
     } else if (tool === 'codex') {
       steps.push({
@@ -542,7 +516,6 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         path: join(paths.homeDir, '.codex', 'config.toml'),
         build: (existing) => buildCodexConfig(existing, endpoint, apiKeyAuth),
         manualSnippet: codexSnippet(endpoint, apiKeyAuth),
-        postInstall: !apiKeyAuth ? 'Run: codex mcp login speko' : undefined,
       });
       steps.push(
         guidanceAppendStep(tool, 'Codex usage guide', join(paths.homeDir, '.codex', 'AGENTS.md')),
@@ -559,7 +532,6 @@ export function buildInitPlan(options: ResolvedInitOptions, paths: InitPaths): P
         path: configPath,
         build: (existing) => buildOpenCodeConfig(existing, endpoint, apiKeyAuth),
         manualSnippet: openCodeSnippet(endpoint, apiKeyAuth),
-        postInstall: !apiKeyAuth ? 'Run: opencode mcp auth speko' : undefined,
       });
     } else if (tool === 'cursor') {
       const configPath =
@@ -594,7 +566,7 @@ export function renderPlanSummary(
   const endpoint = DEFAULT_AUTH_MCP_URL;
   const lines = [
     `Endpoint: ${endpoint}`,
-    `Auth: ${options.auth === 'api-key' ? 'SPEKO_API_KEY' : 'OAuth'}`,
+    `Auth: ${options.auth === 'oauth' ? 'OAuth (browser sign-in)' : 'SPEKO_API_KEY'}`,
     `Scope: ${options.scope}`,
     '',
     'Planned changes:',
@@ -723,9 +695,10 @@ async function promptForMissingOptions(
     (await promptValue<InitAuth>(
       select({
         message: 'How should Speko MCP authenticate?',
+        initialValue: 'oauth',
         options: [
-          { value: 'oauth', label: 'OAuth', hint: 'recommended when your tool supports it' },
-          { value: 'api-key', label: 'SPEKO_API_KEY', hint: 'uses an environment variable' },
+          { value: 'oauth', label: 'OAuth browser sign-in' },
+          { value: 'api-key', label: 'SPEKO_API_KEY' },
         ],
       }),
     ));
@@ -865,33 +838,11 @@ function buildClaudeStep(
   endpoint: string,
   apiKeyAuth: boolean,
 ): PlannedInitStep {
-  const manualSnippet = claudeSnippet(endpoint, options.scope, apiKeyAuth);
-  if (apiKeyAuth) {
-    return {
-      kind: 'manual',
-      tool: 'claude',
-      label: 'Claude Code',
-      manualSnippet,
-    };
-  }
-
   return {
-    kind: 'command',
+    kind: 'manual',
     tool: 'claude',
     label: 'Claude Code',
-    command: [
-      'claude',
-      'mcp',
-      'add',
-      '--transport',
-      'http',
-      '--scope',
-      options.scope,
-      'speko',
-      endpoint,
-    ],
-    manualSnippet,
-    postInstall: 'In Claude Code, run /mcp and complete sign-in.',
+    manualSnippet: claudeSnippet(endpoint, options.scope, apiKeyAuth),
   };
 }
 
@@ -981,20 +932,21 @@ function cursorSnippet(endpoint: string, apiKeyAuth: boolean): string {
 }
 
 function claudeSnippet(endpoint: string, scope: InitScope, apiKeyAuth: boolean): string {
-  return apiKeyAuth
-    ? `claude mcp add --transport http --scope ${scope} speko ${endpoint} \\
-  --header "Authorization: Bearer sk_live_xxx"`
-    : `claude mcp add --transport http --scope ${scope} speko ${endpoint}`;
+  const header = apiKeyAuth
+    ? ` \\
+  --header "Authorization: Bearer \${SPEKO_API_KEY}"`
+    : '';
+  return `claude mcp add --transport http --scope ${scope} speko ${endpoint}${header}`;
 }
 
 function otherClientSnippet(endpoint: string, apiKeyAuth: boolean): string {
-  const auth = apiKeyAuth
-    ? 'API key auth: Send Authorization: Bearer sk_live_xxx'
-    : "OAuth: Use the client's OAuth flow";
-
   return `Name: speko
 URL: ${endpoint}
-${auth}`;
+${
+  apiKeyAuth
+    ? `API key auth: Send Authorization: Bearer ${API_KEY_SHELL_REFERENCE}`
+    : 'OAuth: Use the browser sign-in prompted by the server challenge.'
+}`;
 }
 
 /** Marker-append guidance into a rules file the USER owns (Codex AGENTS.md, GEMINI.md, global_rules.md). */
@@ -1030,12 +982,12 @@ function guidanceFileStep(
   };
 }
 
-function bridgeMcpServersSnippet(
+function httpMcpServersSnippet(
+  endpoint: string,
   apiKeyAuth: boolean,
-  env: Environment,
   extraFields: Record<string, unknown> = {},
 ): string {
-  const server = { ...bridgeServerEntry(apiKeyAuth, env), ...extraFields };
+  const server = { ...httpServerEntry(endpoint, apiKeyAuth), ...extraFields };
   return JSON.stringify({ mcpServers: { speko: server } }, null, 2);
 }
 
@@ -1060,20 +1012,13 @@ function vscodeSnippet(endpoint: string, apiKeyAuth: boolean): string {
 }`;
 }
 
-function zedSnippet(apiKeyAuth: boolean, env: Environment, settingsPath: string): string {
-  const entry = bridgeServerEntry(apiKeyAuth, env) as {
-    command: string;
-    args: string[];
-    env?: Record<string, string>;
-  };
+function zedSnippet(endpoint: string, settingsPath: string, apiKeyAuth: boolean): string {
   const contextServer = {
     context_servers: {
       speko: {
-        command: {
-          path: entry.command,
-          args: entry.args,
-          ...(entry.env ? { env: entry.env } : {}),
-        },
+        source: 'custom',
+        url: endpoint,
+        ...(apiKeyAuth ? { headers: { Authorization: `Bearer ${API_KEY_ENV_REFERENCE}` } } : {}),
       },
     },
   };
@@ -1206,14 +1151,14 @@ function readInlineFlagValue(arg: string): string {
   return value;
 }
 
-function parseAuth(value: string): InitAuth {
-  if (value === 'oauth' || value === 'api-key') return value;
-  throw new Error(`Invalid --auth value: ${value}`);
-}
-
 function parseScope(value: string): InitScope {
   if (value === 'user' || value === 'project') return value;
   throw new Error(`Invalid --scope value: ${value}`);
+}
+
+function parseAuth(value: string): InitAuth {
+  if (value === 'oauth' || value === 'api-key') return value;
+  throw new Error(`Invalid --auth value: ${value}`);
 }
 
 /** `--tools all` toggles run-time detection; anything else is a forced comma list. */

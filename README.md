@@ -1,80 +1,41 @@
 # @spekoai/mcp
 
-Interactive installer and local stdio-to-remote bridge for Speko MCP. The
-installer configures Speko's hosted remote MCP endpoint in coding tools that
-support it. The `bridge` command is only for MCP clients that require a local
-stdio command: it speaks stdio to the client, connects to Speko's hosted MCP
-server over HTTP, and does not contain Speko tool logic of its own.
+Configure coding agents to connect directly to Speko's hosted MCP server over
+HTTP. Version 2 removes the local stdio bridge: modern clients connect to
+`https://mcp.speko.ai/mcp` with OAuth browser sign-in or `SPEKO_API_KEY`.
 
 ## Install
+
+Run the setup wizard and choose OAuth for interactive use:
 
 ```bash
 npx @spekoai/mcp@latest init
 ```
 
-The package exposes the `spekoai-mcp` binary. Run `init` for a guided setup
-wizard: it detects which coding agents are installed (Claude Code, Claude
-Desktop, Codex, OpenCode, Cursor, Windsurf, VS Code, Gemini CLI, Cline, Zed)
-and preselects them, then writes each agent's config in its own convention —
-remote HTTP where the agent supports it, the local stdio `bridge` where it
-does not. Agents with a global rules file (Codex, Gemini CLI, Windsurf, Cline,
-VS Code) also get a short Speko usage guide in that convention.
+For automation, create a Platform API key in the Speko dashboard and choose
+API-key authentication.
 
-For scripted setup, pass the choices explicitly (`--tools all` configures
-every detected agent):
+The wizard detects Claude Code, Claude Desktop, Codex, OpenCode, Cursor,
+Windsurf, VS Code, Gemini CLI, Cline, and Zed. It writes each client's direct
+HTTP configuration and preserves existing JSON, JSONC, and TOML settings.
+
+For scripted setup, pass every choice explicitly:
 
 ```bash
 npx @spekoai/mcp@latest init --auth oauth --tools all --scope user --yes
-npx @spekoai/mcp@latest init --auth oauth --tools claude,cursor,windsurf --scope user --yes
+SPEKO_API_KEY=sk_live_xxx npx @spekoai/mcp@latest init --auth api-key --tools claude,cursor,codex --scope project --yes
 ```
 
-## Bridge
+Use `--dry-run` to print the proposed edits without changing files. Run
+`npx @spekoai/mcp@latest --help` for the complete option list.
 
-Most users should run `init`. Use `bridge` only when a client cannot connect to
-remote MCP directly and asks for a local command-based MCP server.
+## Gateway key management
 
-```bash
-npx @spekoai/mcp@latest bridge
-```
+The `gateway.keys.list`, `gateway.keys.create`, and `gateway.keys.revoke` tools
+require a Platform API key created by an organization owner or admin with
+**Manage Gateway API keys** enabled. Other MCP tools work with an ordinary
+unscoped Platform API key.
 
-For API-key auth in a headless bridge setup, provide `SPEKO_API_KEY` in the MCP
-client environment. The bridge forwards it to the hosted MCP server as
-`Authorization: Bearer ...`.
-
-The `bridge` command adapts local stdio MCP to Speko's remote HTTP MCP endpoint.
-Use direct remote MCP configuration instead when your client supports it.
-
-Defaults:
-
-- Endpoint: `https://mcp.speko.ai/mcp`
-
-Environment variables:
-
-- `SPEKO_API_KEY`: forward an API key as a bearer token.
-
-CLI examples:
-
-```bash
-npx @spekoai/mcp@latest bridge
-SPEKO_API_KEY=sk_live_xxx npx @spekoai/mcp@latest bridge
-```
-
-All remaining arguments are passed through to
-[`mcp-remote`](https://www.npmjs.com/package/mcp-remote).
-
-## Troubleshooting
-
-Run:
-
-```bash
-npx @spekoai/mcp@latest bridge --help
-```
-
-When using `bridge`, OAuth state is handled by
-[`mcp-remote`](https://www.npmjs.com/package/mcp-remote). It may create
-a local OAuth cache directory, or use `MCP_REMOTE_CONFIG_DIR` to store local
-OAuth credentials and debug logs. The `init` wizard does not write that
-directory.
-
-For connection or OAuth issues, pass `--debug` and inspect the log path printed
-by [`mcp-remote`](https://www.npmjs.com/package/mcp-remote).
+Speko MCP is stateless for both authentication modes. Better Auth owns the
+OAuth flow; the MCP service stores no clients, codes, refresh tokens, or local
+credential cache. Gateway key tools currently require API-key auth.
