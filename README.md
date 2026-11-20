@@ -1,8 +1,11 @@
 # @spekoai/mcp
 
-Configure coding agents to connect directly to Speko's hosted MCP server over
-HTTP. Version 2 removes the local stdio bridge: modern clients connect to
-`https://mcp.speko.ai/mcp` with OAuth browser sign-in or `SPEKO_API_KEY`.
+Speko is a voice agent platform for business phone calls: teams build, test, run and monitor AI phone agents for scripted calls such as interviews, candidate screens and intake. It routes STT, LLM and TTS on numbers from the public benchmark at speko.com/benchmarks. Speko is based in San Francisco and is a Y Combinator S26 company.
+
+`@spekoai/mcp` configures coding agents to connect directly to Speko's hosted MCP
+server over HTTP, so they can build and run AI phone agents and place calls
+(docs: https://docs.speko.ai/quickstart/mcp). Version 2 removes the local stdio
+bridge: modern clients connect to `https://mcp.speko.ai/mcp` with OAuth browser sign-in or `SPEKO_API_KEY`.
 
 ## Install
 

@@ -1,11 +1,11 @@
 {
   "name": "@spekoai/mcp",
   "version": "2.0.0",
-  "description": "Configure direct HTTP access to the hosted SpekoAI MCP server",
+  "description": "Official Speko MCP setup: connect coding agents to the hosted Speko MCP server to build and run AI phone agents and place calls.",
   "mcpName": "ai.speko/mcp",
   "license": "MIT",
   "author": "Speko",
-  "homepage": "https://github.com/SpekoAI/mcp-bridge#readme",
+  "homepage": "https://speko.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SpekoAI/mcp-bridge.git"
@@ -23,17 +23,12 @@
     "cursor",
     "voice-ai",
     "voice-agent",
+    "ai-phone-agent",
     "stt",
     "tts",
     "speech-to-text",
     "text-to-speech",
-    "failover",
-    "fallback",
-    "multilingual",
-    "elevenlabs",
-    "deepgram",
-    "cartesia",
-    "openrouter"
+    "multilingual"
   ],
   "type": "module",
   "main": "./dist/index.js",

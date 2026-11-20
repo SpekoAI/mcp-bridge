@@ -23,8 +23,8 @@ export const GUIDANCE_END = '<!-- END speko mcp guidance -->';
  */
 export const GUIDANCE_CARD = `# Speko MCP — voice-AI platform tools
 
-The \`speko\` MCP server connects this agent to the Speko platform (voice-AI
-gateway: STT, LLM and TTS through one API, routed to the best provider).
+The \`speko\` MCP server connects this agent to Speko, a voice agent platform
+for business phone calls: build, test, run and monitor AI phone agents.
 
 - Look things up first: \`search_docs\` answers Speko API and platform questions
   from the official docs — prefer it over guessing endpoints or parameters.
@@ -34,7 +34,7 @@ gateway: STT, LLM and TTS through one API, routed to the best provider).
 - These tools act on the user's REAL Speko organization (agents, numbers,
   credits) — create, deploy and delete deliberately, never for exploration.
 
-Docs: https://docs.speko.dev`;
+Docs: https://docs.speko.ai`;
 
 /** Pure: insert or replace the marker-delimited block in an existing file body. */
 export function upsertGuidanceBlock(raw: string, card: string = GUIDANCE_CARD): string {
